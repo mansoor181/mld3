@@ -1,0 +1,102 @@
+# The Di4C baseline objective on ImageNet-256 as VQGAN f16 tokens, M=8. This cell differs
+# from imagenet256_maskgitT_r2_M8 only in the objective and its di4c block, so reading the
+# two side by side isolates the objective on this corpus. The corpus is a
+# 16x16 grid of codebook indices over a codebook of 1024 with the absorbing MASK inside the
+# vocabulary at 1024, which is the same index the MaskGIT teacher reserves for its own visual
+# mask, so nothing extends the vocabulary.
+#
+# The trunk is lkf rather than mdlm_dit. Every other arm uses mdlm_dit for one reason only,
+# which is architectural fidelity to an MDLM teacher so that the student can be warm-started
+# from it. MaskGIT carries learned absolute positions and a per-position output bias, neither
+# of which our trunk can express, hence no warm start from it is faithful even in principle.
+# With warm-starting off the table the lkf trunk is free, and it is the one that actually reads
+# the horizon s at models/trunk.py:325-327. This arm is therefore the only place in the paper
+# where the ancestral and the analytic rollouts are both admissible on the same student.
+#
+# The teacher has no schedule and no time input of its own, so the linear schedule with a zero
+# epsilon is a definition rather than a description. The student must share it, because
+# teacher_analytic_step and sample_lkf_analytic both read these two fields to turn a kappa into
+# a mask rate, and they have to agree.
+#
+# We run 4 teacher sub-steps rather than the text arm's 8. Sub-steps multiply the dominant
+# teacher term directly and are the single largest lever on this arm, and the WikiText-103
+# measurement put 4 sub-steps at 1.04x of the Di4C control against 1.29x at 8.
+
+seed: 0
+out_dir: ${IMAGE_ROOT}/results/image_distill/imagenet256_maskgitT_di4c_M8
+dataset:
+  name: imagenet256
+batch_size: 256
+micro_batch_size: 32
+num_workers: 4
+lr: 3.0e-4
+wd: 0.0
+betas: [0.9, 0.999]
+lr_schedule: constant_warmup
+warmup_steps: 1000
+steps: 30000
+log_every: 100
+val_every: 1000
+ckpt_every: 2000
+keep_last_ckpts: 1
+ema: 0.9999
+teacher:
+  kind: maskgit
+  ckpt: ${IMAGE_ROOT}/maskgit/MaskGIT_ImageNet_256.pth
+  vocab_size: 1025
+  mask_id: 1024
+  codebook_size: 1024
+  n_classes: 1000
+  hidden_dim: 768
+  depth: 24
+  heads: 16
+  mlp_dim: 3072
+  # The frozen teacher runs under bfloat16 autocast. We measured its posterior against the
+  # float32 one at 0.0020 nats of KL per position and its masked NELBO at 5.0113 against
+  # 5.0073 nats, while a forward pass falls from 76.1 to 23.0 ms. That accuracy cost is three
+  # orders of magnitude below the distillation signal and it buys 1.4x to 1.8x per step.
+  bf16: true
+  # The teacher is the class marginal, one class drawn per row and held for the whole
+  # rollout, which is a legitimate unconditional model of ImageNet and is far stronger than
+  # the null label. We measured FID 76.89 against 91.83 at 8 steps and 51.86 against 71.80
+  # at 32, with the Inception score rising from 13.57 to 24.41. Redrawing the class at every
+  # reverse step instead of holding it is worse than the null label at 112.49, because one
+  # trajectory then conditions each step on a different class. The student never sees a
+  # label and learns the y-average of these rollouts, which is exactly the unconditional
+  # model we evaluate.
+  label_mode: held
+distill:
+  K: 4
+  substeps: 4
+  objective_variant: di4c
+  di4c:
+    latent_bsize: 4
+    alpha_t: sigmoid
+    alpha_const: 0.1
+    distil_delta: 0.01
+    T: 1024
+    use_cv: true
+    latent_prior: uniform
+    train_nll_exact: true
+model:
+  dim: 768
+  depth: 12
+  heads: 12
+  mlp_mult: 4
+  latent_M: 8
+  latent_last_L: 4
+  time_embed_dim: 256
+  tie_embeddings: false
+  dropout: 0.0
+  cond_dim: 128
+  use_mask_prior: true
+  mask_id: 1024
+  trunk_arch: lkf
+  time_conditioning: true
+  warm_start: false
+  time_eps: 0.0
+  schedule: linear
+  dt_min: 0.02
+  dt_max: 1.0
+  router_entropy_coef: 0.1
+  router_load_balance_coef: -0.1

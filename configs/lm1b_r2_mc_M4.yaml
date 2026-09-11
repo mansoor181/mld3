@@ -1,0 +1,59 @@
+# Stage-1 cell S1-09 of docs/v2_fair_comparison_plan.md, 15k steps on LM1B.
+# R2 at M=4 with the transition score replaced by its single-sample Monte Carlo surrogate,
+# which is what separates exact marginalisation over the mixture from the extra supervision.
+# If exact beats mc_sample here the gain is marginalisation, and if the two tie then the gain
+# was the supervision all along.
+# The teacher rollout is held at 4 sub-steps on every rung of this ladder, including R0, so
+# that supervision is the only axis that moves between the rungs. The v1 runs reported in the
+# paper used 8, and R2 cannot afford 8 and stay inside the Di4C arm's measured cost, so
+# matching the rungs to each other matters more here than matching R0 to the v1 setting.
+seed: 0
+out_dir: ${RESULTS}/v2_stage1/lm1b_r2_mc_M4
+dataset:
+  name: lm1b
+batch_size: 256
+micro_batch_size: 32
+num_workers: 4
+lr: 0.0003
+wd: 0.0
+betas: [0.9, 0.999]
+lr_schedule: constant_warmup
+warmup_steps: 1000
+steps: 15000
+log_every: 100
+val_every: 1000
+ckpt_every: 5000
+keep_last_ckpts: 1
+ema: 0.9999
+teacher:
+  ckpt: ${TEACHERS}/track2_lm1b/lm1b_LKFx0ditpmfm_M1_seed0/ckpt_0200000.pt
+distill:
+  objective_variant: mc_sample
+  K: 4
+  substeps: 4
+  time_sampling: mixed
+  offgrid_frac: 0.5
+  horizon: random
+  horizon_range: [0.03125, 1.0]
+  substep_mode: scaled
+  x0_kl_coef: 1.0
+  x0_kl_rows: 0.25
+model:
+  dim: 768
+  depth: 12
+  heads: 12
+  mlp_mult: 4
+  latent_M: 4
+  latent_last_L: 4
+  time_embed_dim: 256
+  tie_embeddings: false
+  dropout: 0.1
+  cond_dim: 128
+  use_mask_prior: true
+  trunk_arch: mdlm_dit
+  time_eps: 0.001
+  schedule: loglinear
+  dt_min: 0.02
+  dt_max: 1.0
+  router_entropy_coef: 0.1
+  router_load_balance_coef: -0.1

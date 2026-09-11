@@ -1,0 +1,49 @@
+# Pinned to the environment the experiments actually ran under: Python 3.10, CUDA 12.1.
+# Install torch from the cu121 index first, then the rest:
+#   pip install --index-url https://download.pytorch.org/whl/cu121 torch==2.2.0 torchvision==0.17.0
+#   pip install -r requirements.txt
+
+torch==2.2.0
+torchvision==0.17.0
+triton==2.2.0
+
+transformers==4.38.2
+tokenizers==0.15.2
+datasets==4.0.0
+huggingface_hub==0.36.2
+safetensors==0.7.0
+hf_transfer==0.1.9
+
+lightning==2.6.5
+pytorch-lightning==2.6.5
+lightning-utilities==0.15.3
+torchmetrics==1.9.0
+
+hydra-core==1.3.2
+omegaconf==2.3.0
+wandb==0.25.1
+einops==0.8.2
+
+numpy==1.26.4
+scipy==1.15.2
+scikit-learn==1.7.2
+pandas==2.3.3
+pyarrow==24.0.0
+fsspec==2024.6.1
+matplotlib==3.10.8
+nltk==3.9.4
+
+# Image arm only: the Inception metric stack behind Frechet distance, precision and recall.
+torch-fidelity==0.4.0
+
+# Optional, molecule arm only. The molecule metrics import these lazily, so the text, DNA and
+# image arms run without them.
+#   rdkit==2024.3.5
+#   fcd_torch==1.0.7
+#   molsets==0.3.1
+
+# Optional, DNA arm only. The held-out activity oracle is downloaded from the hub at eval time.
+#   multimolecule==0.0.9
+
+# Not installed on purpose. The ReDi metric package has a sibling module that imports `clip`;
+# metrics/image_metrics.py imports the Inception metrics directly to avoid pulling it in.
