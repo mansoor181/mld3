@@ -1,12 +1,11 @@
 # Architecture
 
-This note describes what each module does and how a training step and an evaluation sweep flow through them. The paper's Sections 4 through 6 give the mathematics; this file gives the code path.
+This document describes what each module does and how a training step and an evaluation sweep flow through them. 
 
-## The student
+## The MLDF student
 
 A student is a `LatentKernelFlow` (`models/latent_kernel.py`) wrapping a `LatentKernelTrunk` (`models/trunk.py`). The trunk is a DiT-style stack of `D` blocks split into a shared stack of `D - L_lat` blocks and a latent stack of `L_lat` blocks that is evaluated once per mixture component. A router head on top of the shared stack produces the mixture weights. Because only the latent stack is per-component, marginalizing over all `M` components costs a fraction of a forward pass rather than `M` forward passes, which is what makes the mixture affordable and is the cost model the decoding policies price against.
 
-The mixture size is a compute knob, not a parameter knob. At width 768, depth 12 and 12 heads the student has the same 94.5 M parameters at `M` of 1, 4 and 8, because the latent stack is shared across components and only re-run.
 
 `mixture_logprob` is the one method the rest of the code calls. It returns the log mixture probability of a transition, the log router weights, and the per-component log probabilities, which is everything the objective and the policies need.
 
@@ -20,7 +19,6 @@ The mixture size is a compute knob, not a parameter knob. At width 768, depth 12
 4. Score the teacher's endpoint under the student's mixture kernel and take the negative log likelihood of that transition.
 5. Add the `x0` KL term, which compares the student's `k`-marginalized denoiser against the teacher's on a fraction of rows. Marginalizing before taking the KL is the point: matching per component would let each component match the marginal separately and the mixture would carry no correlation.
 
-The Di4C baseline shares this file. `di4c_step_loss` implements the published objective inside our own trunk so that the student architecture, teacher, data and decoder are identical and only the supervision differs. `tests/test_di4c_parity.py` checks that implementation against the authors' released loss term by term.
 
 ## An evaluation sweep
 
@@ -38,6 +36,4 @@ Two decoders exist. The ancestral decoder samples `x_s` from the learned two-tim
 - consensus commit keeps one chain and, at every step, draws one proposal per component from the single call that already enumerates them, then advances with the proposal the router-weighted mixture scores highest. It costs `K*C(M)` and can realize component sequences no committed rollout can reach.
 - best-of-R rolls out `R` committed chains and returns the one a selector prefers. The running evidence the trunk already accumulates is a free selector and beats a Monte Carlo estimate of the mixture NELBO, so it is what the paper reports.
 
-## Paths
 
-Nothing outside this tree is referenced by a literal path. `paths.py` resolves every root from the environment with a documented default, and `scripts/env.sh` sets the same variables for the shell drivers. Config files name their roots as `${MLDF_RESULTS}` and similar, and `training.common.load_config` expands them at load time, which is why the same cell config runs unchanged on either machine.

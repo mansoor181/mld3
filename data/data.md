@@ -1,6 +1,6 @@
 # Data, teachers and vendored code
 
-Every artifact an experiment reads, what produces it, and where it lives. Locations resolve through `paths.py` from the environment variables below, typically set in the git-ignored `.env` file at the repository root; without one, everything defaults to directories beside the repository.
+Every artifact an experiment reads, what produces it, and where it lives.
 
 ## Roots
 
@@ -28,7 +28,7 @@ QM9 at 32 positions and ZINC-250k at 74, read from `$MLDF_MOL_ROOT/<name>/parsed
 
 Tokenizers and reference SMILES come from the hub (`yairschiff/qm9-tokenizer`, `yairschiff/zinc250k-tokenizer`, and the matching datasets for the reference set). Teachers are MDLM models trained through the PairFlow fork and stored at `$MLDF_RESULTS/mol_teacher/<name>_mdlm/checkpoints/last.ckpt`.
 
-The molecule metrics need `rdkit` and `fcd_torch`, which are optional extras in `requirements.txt`.
+The molecule metrics need `rdkit` and `fcd_torch`, which are optional in `requirements.txt`.
 
 ## DNA
 
@@ -61,4 +61,3 @@ Under `$MLDF_BASELINES`, each a pinned clone. The live code touches them only th
 | `di4c/` | github.com/sony/di4c | `ac61ff9f` | the MaskGIT transformer, and the reference Di4C loss the parity test checks against |
 | `redi/` | github.com/Ugness/ReDi_discrete | `45290923` | the VQGAN decoder and the Inception metric stack |
 
-The ReDi image tree and the Di4C MaskGIT tree both ship a top-level package named `Network`, and an image evaluation builds both in one process. `utils/vendor_import.py` loads each by file path under a distinct module name so the two cannot collide.
