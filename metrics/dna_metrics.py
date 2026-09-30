@@ -1,20 +1,13 @@
-"""Regulatory-DNA metrics for the DeepSTARR arm.
+"""Frechet Biological Distance and activity Wasserstein for the DeepSTARR arm.
 
-A generated enhancer is scored by a trained regressor rather than by a parser, which is what
-makes this arm a statement about function instead of about syntax. We use the released
-PyTorch port of the DeepSTARR convolutional oracle, `multimolecule/deepstarr`, so that nothing
-in this project has to depend on TensorFlow.
+A generated enhancer is scored by a trained regressor rather than by a parser, which makes the
+arm a statement about function rather than syntax. The FBD compares Gaussian fits of the
+oracle's penultimate embeddings on generated and held-out real sequences, and the Wasserstein
+distance compares the two predicted-activity distributions on each head.
 
-Three numbers come out of the oracle. The Frechet Biological Distance compares the Gaussian
-fits of the oracle's penultimate-layer embeddings on generated and on held-out real sequences,
-which is the sequence analogue of the Frechet Inception Distance. The Wasserstein distance on
-each of the two predicted activity heads compares the generated activity distribution with the
-real one. The top-decile fraction reports how much of the generated set the oracle places above
-the 90th percentile of the real developmental activity, which is the quantity a designer cares
-about.
-
-Nothing here is trustworthy until `calibrate` reproduces the oracle's published held-out
-correlation, and `scripts/gate_deepstarr_oracle.py` runs that check.
+The oracle is the released PyTorch port `multimolecule/deepstarr`, rebuilt here rather than
+imported, because that package's initialiser pulls in a dependency needing a newer torch. The
+modules are named so the released state dict loads without key surgery.
 """
 from __future__ import annotations
 
@@ -25,7 +18,7 @@ import torch
 from huggingface_hub import hf_hub_download
 from safetensors.torch import load_file
 from scipy import linalg
-from scipy.stats import pearsonr, spearmanr, wasserstein_distance
+from scipy.stats import wasserstein_distance
 
 _ORACLE_ID = "multimolecule/deepstarr"
 LABEL_NAMES = ("dev", "hk")
@@ -47,13 +40,10 @@ _BN_MOMENTUM = 0.1
 
 
 class DeepStarrOracle(torch.nn.Module):
-    """A standalone port of the released DeepSTARR regressor.
+    """The released DeepSTARR regressor.
 
-    We rebuild the four convolutional blocks and the two fully connected layers here rather
-    than importing `multimolecule`, whose package initialiser pulls in a dependency that
-    requires a newer torch than the environment carries. The module list is named so that
-    the released state dict loads into it without any key surgery, and `tests` on the
-    published held-out correlation confirm the port end to end.
+    Four convolutional blocks and two fully connected layers, matching the config that
+    ships with the released weights.
     """
 
     def __init__(self, vocab_size: int = 5, num_labels: int = 2, seq_len: int = ORACLE_SEQ_LEN):
@@ -196,54 +186,3 @@ def evaluate(gen_seqs: list[str], real_seqs: list[str], device: str = "cuda",
     out["top_decile_thresh_dev"] = thresh
     out["pi90_dev"] = float((g_act[:, 0] > thresh).mean())
     return out
-
-
-def calibrate(seqs: list[str], labels: np.ndarray, device: str = "cuda",
-              model_id: str = _ORACLE_ID) -> dict:
-    """Pearson and Spearman correlation of the oracle against measured labels.
-
-    This is the hard gate on the arm. If the port does not reproduce the published held-out
-    correlation then no number downstream of it means anything.
-    """
-    pred, _ = predict(seqs, device=device, model_id=model_id)
-    labels = np.asarray(labels, dtype=np.float64)
-    out = {"n": len(seqs)}
-    for j, name in enumerate(LABEL_NAMES):
-        out[f"pearson_{name}"] = float(pearsonr(pred[:, j], labels[:, j])[0])
-        out[f"spearman_{name}"] = float(spearmanr(pred[:, j], labels[:, j])[0])
-    return out
-
-
-# ---------------- motif diagnostics ----------------
-
-# Core developmental and housekeeping motifs reported for Drosophila STARR-seq enhancers.
-# The counts are a diagnostic rather than a headline number, because a consensus string match
-# is a coarse stand-in for a position weight matrix scan.
-MOTIFS = {
-    "dev_GATA": "GATAA",
-    "dev_AP1": "TGACTCA",
-    "dev_twist": "CATATG",
-    "hk_DRE": "TATCGATA",
-    "hk_Ohler1": "GTGTGACCG",
-    "hk_Ohler6": "AAGTGTGA",
-}
-
-
-def _revcomp(s: str) -> str:
-    return s.translate(str.maketrans("ACGT", "TGCA"))[::-1]
-
-
-def motif_counts(seqs: list[str]) -> dict:
-    """Fraction of sequences containing each consensus motif on either strand."""
-    out = {}
-    n = max(len(seqs), 1)
-    for name, motif in MOTIFS.items():
-        rc = _revcomp(motif)
-        hits = sum(1 for s in seqs if motif in s or rc in s)
-        out[f"motif_{name}"] = hits / n
-    return out
-
-
-__all__ = ["DeepStarrOracle", "load_oracle", "encode_for_oracle", "predict",
-           "frechet_distance", "evaluate", "calibrate", "motif_counts", "MOTIFS",
-           "LABEL_NAMES", "ORACLE_ALPHABET", "ORACLE_SEQ_LEN"]

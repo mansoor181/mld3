@@ -1,0 +1,48 @@
+# ImageNet-256 as VQGAN f16 tokens, with the frozen MaskGIT as teacher.
+#
+# The trunk is "lkf" rather than "mdlm". Every other arm matches the MDLM block layout so the
+# student can warm-start from its teacher; MaskGIT carries learned absolute positions and a
+# per-position output bias that this trunk cannot express, so no warm start from it is faithful
+# and the choice is free here. MaskGIT also has no noise schedule of its own, so the linear
+# schedule at eps = 0 is a definition both sides must share, since each turns a kappa into a
+# mask rate through these two fields.
+seed: 0
+out_dir: ${IMAGE_ROOT}/results/imagenet256_M8
+dataset: imagenet256
+steps: 30000
+batch_size: 256
+micro_batch_size: 32
+num_workers: 4
+lr: 3.0e-4
+wd: 0.0
+betas: [0.9, 0.999]
+warmup_steps: 1000
+ema: 0.9999
+log_every: 100
+ckpt_every: 2000
+teacher:
+  kind: maskgit
+  ckpt: ${BASELINES}/maskgit/pretrained_maskgit/MaskGIT/MaskGIT_ImageNet_256_V2.pth
+  vocab_size: 1025
+  mask_id: 1024
+  bf16: true
+distill:
+  K: 4
+  substeps: 4
+  eta: 0.5
+  horizon: [0.03125, 1.0]
+  x0_coef: 1.0
+  x0_rows: 0.25
+model:
+  dim: 768
+  depth: 12
+  heads: 12
+  latent_M: 8
+  latent_last_L: 4
+  time_embed_dim: 256
+  cond_dim: 128
+  dropout: 0.0
+  arch: lkf
+  schedule: linear
+  time_eps: 0.0
+  router_entropy_coef: 0.1

@@ -1,160 +1,99 @@
-# MLDF: Mixture-of-Latents for Distilling Flows
+# Mixture-of-Latents for Few-Step Discrete Diffusion Distillation (MLD3)
 
-This is the codebase for the MLDF. It distills a pretrained masked discrete diffusion teacher into a student whose reverse kernel is a mixture of factorized heads sharing a router, which lets a single student step express correlated joint outcomes that a factorized step cannot represent. This repo holds one trainer, two evaluation entry points, and the scripts that drive them across five corpora. 
+Reference implementation. An MLD3 student replaces the factorized step of a masked diffusion
+model with a mixture of `M` factorized components selected by a learned router,
+
+    p_theta(x_s | x_t) = sum_k w_k(x_t, t) prod_i P_{i,k}(x_s^i | x_t, t),
+
+which makes the step likelihood a closed-form sum over `M` terms and gives the mixing weights
+a gradient. At `M = 1` it reduces to a masked diffusion student.
 
 ```
-paths.py        every external root, resolved from the environment and the .env file
-data/           one loader per corpus family: text, mols, dna, images
-models/         trunk.py (the shared backbone), latent_kernel.py (the mixture kernel),
-                teacher_adapters.py (frozen MDLM and MaskGIT teachers), wtask_start.py
-sampling/       sampler.py (ancestral and analytic decoders), policies.py (the decoding policies)
-metrics/        text statistics, plus molecule, DNA and image metric stacks
-training/       trainer_distill.py (the trainer), common.py (seeding, EMA, config loading)
-eval/           eval_text.py (the scoring sweep, all domains), eval_policies.py (the policy sweep)
-configs/        the 28 cell configs behind the paper's tables
-scripts/        prep, train, eval, collect, figures, analysis, baselines and infra drivers
-tests/          correctness checks, cost probes and decoder diagnostics
+paths.py            external roots, resolved from the environment and an optional .env
+models/trunk.py     DiT trunk: shared blocks, router head, component-specific top blocks
+models/mld3.py      the mixture kernel and its closed-form step likelihood
+models/teachers.py  frozen MDLM and MaskGIT teachers, and the analytic rollout
+models/wtask_start.py  copy an MDLM backbone into a student (molecules and DNA)
+training/losses.py  L_trans + lambda_0 * L_0 + R, and the time sampling
+training/train.py   the trainer
+sampling/sampler.py spread consensus, commit-k and best-of-M
+data/               one loader per corpus, plus decoding
+metrics/            text, molecule, DNA and image metrics
+eval/evaluate.py    sample across a budget grid and score
+configs/            one config per reported task
+tests/              correctness checks for the kernel and the samplers
 ```
 
-## The five tasks
+## Tasks and teachers
 
-| task | corpus | teacher |
-|---|---|---|
-| text | LM1B, 128 tokens | MDLM-equivalent x0 model in our own checkpoint format |
-| text | WikiText-103, 128 tokens | MDLM |
-| molecules | QM9, ZINC-250k | MDLM trained through the PairFlow fork |
-| DNA | DeepSTARR, 249 bp | MDLM trained through the PairFlow fork |
-| images | ImageNet-256 VQ tokens, 256 positions | frozen MaskGIT |
-
-`data/data.md` gives the corpus, teacher and reference artifact for each task, with the script that produces every one.
+| task      | corpus                          | L   | teacher                    |
+|-----------|---------------------------------|-----|----------------------------|
+| text      | LM1B                            | 128 | MDLM                       |
+| text      | WikiText-103                    | 128 | MDLM                       |
+| molecules | QM9, ZINC-250k                  | 32, 74 | MDLM (PairFlow fork)    |
+| DNA       | DeepSTARR                       | 249 | MDLM (PairFlow fork)       |
+| images    | ImageNet-256 VQGAN f16 tokens   | 256 | frozen MaskGIT             |
 
 ## Setup
 
-The experiments ran under Python 3.10 with the pins in `requirements.txt`. The molecule and DNA metric stacks need extra packages that the text, and those are listed separately at the bottom of that file.
-
 ```bash
-python -m pip install -r requirements.txt
-source scripts/env.sh          # data roots, HuggingFace caches, allocator settings
+pip install -r requirements.txt
 ```
 
+Point the data roots at your own directories, either through the environment or through a
+`.env` file beside `paths.py`:
 
-## Quickstart
-
-A short test trains for a few hundred steps and exercises the whole path, from the loader through the teacher to a checkpoint:
-
-```bash
-GPU=0 CELLS=smoke_lm1b_r2 bash scripts/train/train_cells.sh
+```
+MLD3_TEXT_ROOT=/data/text
+MLD3_MOL_ROOT=/data/mols
+MLD3_DNA_ROOT=/data/dna
+MLD3_IMAGE_ROOT=/data/imagenet256
+MLD3_BASELINES=/data/baselines      # mdlm, pairflow, maskgit, redi checkouts
+MLD3_TEACHERS=/data/teachers
+MLD3_RESULTS=/data/results
 ```
 
-Then score a finished cell on the ten-point budget grid the paper uses:
+The text and molecule caches are the pre-tokenized dumps the MDLM and PairFlow repositories
+build, so the comparison uses one tokenization per corpus. The other two are built here:
 
 ```bash
-RESULTS=$MLDF_RESULTS/lm1b_distill GPU=0 POLICY=cons \
-  CELLS="lm1b_M4_K4_seed0:0050000" bash scripts/eval/eval_cells.sh
+python scripts/prep_deepstarr.py
+python scripts/prep_imagenet256.py
+python scripts/build_image_refs.py     # Inception references for FID
 ```
 
+Teachers are loaded from their own checkpoints through `models/teachers.py`, which imports the
+DiT class from the baseline checkout by file path, since both trees ship a `models` package.
 
-## Running the checks
+## Training
 
 ```bash
-python -m tests.test_wtask_start        # wtask start preserves every single-component route
-python -m tests.test_di4c_parity       # the Di4C reimplementation matches the reference term by term
-python -m tests.test_supervision       # the supervision path: time sampling, the x0 KL, its gradient
-python -m tests.test_policy_analytic --ckpt <a checkpoint>   # the analytic decoder's reveal schedule
+python -m training.train --config configs/lm1b_M4.yaml
 ```
 
-`models/architecture.md` describes what each module does and how a training step and an evaluation sweep flow through them.
+The objective is the transition loss of Eq. 6, the auxiliary loss of Eq. 11 on a quarter of
+each micro-batch, and the router entropy regularizer. Half of the time pairs are drawn off the
+`K`-step schedule with a log-uniform step size, so that the objective rather than the density
+of supervision is what separates this from methods that sample a fine discretization.
 
-
-
-# Reproducing the results
-
-Each section below gives the chain from raw data to the numbers in the manuscript. Every command assumes `source scripts/env.sh` has run and that the working directory is this tree.
-
-The evaluation grid is the same everywhere: NFEs 1 through 8 plus 16 and 32, the analytic decoder, and the three decoding policies of Section 6.3. Consensus commit is the headline policy for any cell with more than one component.
-
-## Common shape
+## Sampling and evaluation
 
 ```bash
-# 1. train one or more cells on a GPU
-GPU=0 CELLS="<cell> <cell>" bash scripts/train/train_cells.sh
-
-# 2. score them on the full grid under a policy
-RESULTS=$MLDF_RESULTS/<task> GPU=0 POLICY=commit CELLS="<cell>:<step>" bash scripts/eval/eval_cells.sh
-RESULTS=$MLDF_RESULTS/<task> GPU=0 POLICY=cons   CELLS="<cell>:<step>" bash scripts/eval/eval_cells.sh
-
-# 3. turn the JSONs into table rows
-python scripts/collect/collect_analytic.py --root $MLDF_RESULTS/<task> --cell <cell>
+python -m eval.evaluate --ckpt results/lm1b_M4/ckpt_0050000.pt --out results/lm1b_M4/eval.json
 ```
 
-## Text tables (LM1B and WikiText-103)
+`--sampler spread` is the default and is the spread consensus of Section 4.3: each step reveals
+exactly the number of positions the schedule expects, taken in a randomly rotated bit-reversal
+order, and only the `--components` highest-weight components are evaluated, each proposing a
+continuation that the renormalised mixture scores. `--sampler commit` holds one component for
+the whole trajectory and `--sampler bestofm` runs one such trajectory per component.
 
-Cells: `lm1b_r2_M1`, `lm1b_r2_M4`, `lm1b_di4c_M1`, `lm1b_di4c_M4`, `wt103_r2_M1`, `wt103_r2_M4`, `wt103_r2_M8`, plus the supervision `lm1b_r0_*`, `lm1b_r1_*` and the sampling ablation `lm1b_r2_mc_M4`.
+Costs are reported in transformer-block passes, since a call over every component costs
+`C(M) = D - L_lat + M*L_lat` while a call naming one costs `D`. With `D = 12` and `L_lat = 4`,
+spread consensus at two components costs 16 per step at any `M`.
+
+## Tests
 
 ```bash
-GPU=0 CELLS="lm1b_r2_M4 lm1b_di4c_M4" bash scripts/train/train_cells.sh
-RESULTS=$MLDF_RESULTS/lm1b_distill GPU=0 POLICY=commit CELLS="lm1b_M4_K4_seed0:0050000" bash scripts/eval/eval_cells.sh
-RESULTS=$MLDF_RESULTS/lm1b_distill GPU=0 POLICY=cons   CELLS="lm1b_M4_K4_seed0:0050000" bash scripts/eval/eval_cells.sh
-RESULTS=$MLDF_RESULTS/lm1b_distill GPU=0 POLICY=bomev  CELLS="lm1b_M4_K4_seed0:0050000" bash scripts/eval/eval_cells.sh
+python -m pytest tests -q
 ```
-
-The decoding-policy table comes from a single sweep per cell, and the cost-adjusted control from the high-budget driver:
-
-```bash
-RESULTS=$MLDF_RESULTS/lm1b_distill GPU=0 CELLS="lm1b_M1_K4_seed0:0050000 lm1b_M4_K4_seed0:0050000" bash scripts/eval/eval_policies.sh
-RESULTS=$MLDF_RESULTS/lm1b_distill GPU=1 CELLS="lm1b_M1_K4_seed0:0050000" bash scripts/eval/eval_highnfe.sh
-```
-
-The paired reranking control, which gives a factorized student the same candidate budget as a mixture, is `scripts/eval/bestofn_control.py`.
-
-## Molecules and DNA
-
-The teachers are MDLM models trained through the PairFlow codebase; `data/data.md` records their checkpoints. 
-
-```bash
-GPU=0 CELLS="qm9_mdlmT_r2_M8 zinc250k_mdlmT_r2_M8 deepstarr_mdlmT_r2_M8" bash scripts/train/train_cells.sh
-RESULTS=$MLDF_RESULTS/v2_nontext GPU=0 POLICY=cons CELLS="qm9_mdlmT_r2_M8" bash scripts/eval/eval_cells.sh
-python scripts/collect/collect_mol_analytic.py
-python scripts/collect/collect_consensus_mol.py
-```
-
-The DNA oracle must pass its workflow before its numbers mean anything:
-
-```bash
-python scripts/infra/gate_deepstarr_oracle.py
-```
-
-## Images
-
-Prepare the corpus and the references once, check the gates, anchor the teacher, then train and score.
-
-```bash
-python scripts/prep/fetch_image_task.py          # teacher, VQGAN, token dump, raw val pixels
-python scripts/prep/prep_imagenet256.py         # token tensors and meta.json
-python scripts/prep/build_image_refs.py         # val_real and val_recon Inception caches
-python scripts/infra/image_gates.py             # the checks that had to pass before spending a GPU day
-python scripts/infra/image_teacher_anchor.py    # the teacher anchor table
-
-GPU=0 CELLS="imagenet256_maskgitT_di4c_M8 imagenet256_maskgitT_r2_M1" LOG_DIR=$ROOT/logs/image bash scripts/train/train_cells.sh
-GPU=1 CELLS="imagenet256_maskgitT_r2_M8 imagenet256_maskgitT_r2_M4"   LOG_DIR=$ROOT/logs/image bash scripts/train/train_cells.sh
-
-GPU=0 CELLS="imagenet256_maskgitT_r2_M8" STEP=0020000 POLICIES="commit cons" bash scripts/eval/eval_image_cells.sh
-```
-
-Commit-k and consensus commit are scored at 10,000 samples, and best-of-M at 2,500, because best-of-M costs twelve times as much per sample. 
-
-## The Di4C baseline
-
-Besides our compute-matched reimplementation, the comparison is with authors' own pipeline run end to end from their repository. Our part of that experiments are in `scripts/baselines/`: exporting our teacher into the checkpoint format their trainer expects (`export_mol_teacher_ema_for_di4c.py`, `convert_mol_teacher_for_di4c.py`), and scoring their finished image students with our metrics so the numbers are on the same grid and references as every other row (`eval_di4c_authors_image.py`). 
-
-
-
-## Acknowledgements
-
-Several components build on the publicly available code of the methods that we compare against:
-
-- [MDLM](https://github.com/kuleshov-group/mdlm) (Sahoo et al., 2024). The text teachers are MDLM checkpoints loaded through their DiT implementation, our EMA tracker mirrors the semantics of their `models/ema.py`, and the absorbing noise schedule follows their `LogLinearNoise`.
-- [Di4C](https://github.com/sony/di4c) (Hayakawa et al., 2024). The Di4C baseline in every table is our own reimplementation of their objective inside our trunk, checked term by term against their released loss by `tests/test_di4c_parity.py`; the frozen ImageNet MaskGIT teacher is loaded from the MaskGIT-pytorch fork vendored in their repository.
-- [PairFlow](https://github.com/KAIST-Visual-AI-Group/PairFlow) (Park et al., 2025). The molecule and DNA teachers are trained with their fork of the MDLM recipe, and their preprocessed QM9 and ZINC-250k dumps define our molecule corpora.
-- [ReDi](https://github.com/Ugness/ReDi_discrete) (Kim et al., 2025). The image evaluation decodes tokens through the Taming VQGAN and scores them with the Inception metric stack from their image tree.
-The trunk itself is a DiT-style backbone in the MDLM configuration.

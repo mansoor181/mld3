@@ -1,19 +1,13 @@
-"""Central path resolution for everything the pipeline reads or writes outside this tree.
+"""External paths, resolved from the environment with a `.env` file at the repository root.
 
-All locations resolve from environment variables, falling back to directories next to the
-repository. Machine-specific values belong in a `.env` file at the repository root (one
-`NAME=value` per line, `#` comments allowed), which is git-ignored and loaded here before the
-lookups run. `docs/data.md` describes what lives under each root and which script produces it.
-
-Roots:
-  MLDF_TEXT_ROOT      tokenized text corpora (LM1B, WikiText-103)
-  MLDF_MOL_ROOT       molecule corpora (QM9, ZINC-250k preprocessed dumps)
-  MLDF_DNA_ROOT       DNA corpus root (DeepSTARR)
-  MLDF_IMAGE_ROOT     image arm: tokens, teacher, reference features, results
-  MLDF_BASELINES      checkouts of the baseline repositories (mdlm, pairflow, di4c, redi)
-  MLDF_RESULTS        run output directories
-  MLDF_TEACHERS       teacher checkpoints trained with the baseline repositories
-  MLDF_DI4C_RESULTS   evaluation output of the released Di4C pipeline, for the comparison figure
+Roots (all optional; each falls back to a directory beside the repository):
+  MLD3_TEXT_ROOT    tokenized LM1B and WikiText-103 caches
+  MLD3_MOL_ROOT     QM9 and ZINC-250k caches
+  MLD3_DNA_ROOT     DeepSTARR cache
+  MLD3_IMAGE_ROOT   ImageNet-256 tokens, reference features and results
+  MLD3_BASELINES    checkouts of the teacher repositories (mdlm, pairflow, maskgit, redi)
+  MLD3_RESULTS      run outputs
+  MLD3_TEACHERS     teacher checkpoints
 """
 from __future__ import annotations
 
@@ -23,50 +17,34 @@ from pathlib import Path
 REPO_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = REPO_DIR.parent
 
-
-def _load_dotenv(path: Path) -> None:
-    if not path.is_file():
-        return
-    for line in path.read_text().splitlines():
+env_file = REPO_DIR / ".env"
+if env_file.is_file():
+    for line in env_file.read_text().splitlines():
         line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        name, value = line.split("=", 1)
-        os.environ.setdefault(name.strip(), value.strip())
+        if line and not line.startswith("#") and "=" in line:
+            name, value = line.split("=", 1)
+            os.environ.setdefault(name.strip(), value.strip())
 
 
-_load_dotenv(REPO_DIR / ".env")
+def _root(name: str, *default: str) -> Path:
+    return Path(os.environ.get(name, str(PROJECT_DIR.joinpath(*default))))
 
 
-def _root(name: str, default: str) -> Path:
-    return Path(os.environ.get(name, default))
+TEXT_ROOT = _root("MLD3_TEXT_ROOT", "data", "text")
+MOL_ROOT = _root("MLD3_MOL_ROOT", "data", "mols")
+DNA_ROOT = _root("MLD3_DNA_ROOT", "data", "dna")
+IMAGE_ROOT = _root("MLD3_IMAGE_ROOT", "data", "imagenet256")
+BASELINES_DIR = _root("MLD3_BASELINES", "baselines")
+RESULTS_ROOT = _root("MLD3_RESULTS", "results")
+TEACHERS_ROOT = _root("MLD3_TEACHERS", "teachers")
 
-
-TEXT_ROOT = _root("MLDF_TEXT_ROOT", str(PROJECT_DIR / "data" / "text"))
-MOL_ROOT = _root("MLDF_MOL_ROOT", str(PROJECT_DIR / "data" / "mols"))
-DNA_ROOT = _root("MLDF_DNA_ROOT", str(PROJECT_DIR / "data" / "dna"))
-IMAGE_ROOT = _root("MLDF_IMAGE_ROOT", str(PROJECT_DIR / "data" / "imagenet256"))
-BASELINES_DIR = _root("MLDF_BASELINES", str(PROJECT_DIR / "baselines"))
-RESULTS_ROOT = _root("MLDF_RESULTS", str(PROJECT_DIR / "results"))
-TEACHERS_ROOT = _root("MLDF_TEACHERS", str(PROJECT_DIR / "teachers"))
-DI4C_RESULTS = os.environ.get("MLDF_DI4C_RESULTS", str(PROJECT_DIR / "results" / "di4c_released"))
-
-# Source trees inside the baselines checkout (see docs/data.md for upstreams and commits).
 MDLM_DIR = str(BASELINES_DIR / "mdlm")
 PAIRFLOW_DIR = str(BASELINES_DIR / "pairflow")
-MASKGIT_DIR = str(BASELINES_DIR / "di4c" / "maskgit-pytorch")
+MASKGIT_DIR = str(BASELINES_DIR / "maskgit")
 REDI_IMAGE_DIR = str(BASELINES_DIR / "redi" / "image")
 
-# Weights & Biases; both empty by default so wandb falls back to the caller's own account.
-WANDB_ENTITY = os.environ.get("WANDB_ENTITY", "")
-WANDB_PROJECT = os.environ.get("WANDB_PROJECT", "mldf")
 
 def config_vars() -> dict:
-    """Roots a config file may reference as ${NAME}; training.common.load_config expands them."""
-    return {
-        "RESULTS": str(RESULTS_ROOT),
-        "TEACHERS": str(TEACHERS_ROOT),
-        "IMAGE_ROOT": str(IMAGE_ROOT),
-        "BASELINES": str(BASELINES_DIR),
-        "PROJECT": str(PROJECT_DIR),
-    }
+    """Roots a config may reference as ${NAME}."""
+    return {"RESULTS": str(RESULTS_ROOT), "TEACHERS": str(TEACHERS_ROOT),
+            "IMAGE_ROOT": str(IMAGE_ROOT), "BASELINES": str(BASELINES_DIR)}

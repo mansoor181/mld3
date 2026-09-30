@@ -1,0 +1,38 @@
+# LM1B, M=4. The M=1 control is the same file with model.latent_M set to 1.
+seed: 0
+out_dir: ${RESULTS}/lm1b_M4
+dataset: lm1b
+steps: 50000
+batch_size: 256
+micro_batch_size: 32
+num_workers: 4
+lr: 3.0e-4
+wd: 0.0
+betas: [0.9, 0.999]
+warmup_steps: 1000
+ema: 0.9999
+log_every: 100
+ckpt_every: 5000
+teacher:
+  kind: mdlm
+  ckpt: ${TEACHERS}/lm1b_mdlm/checkpoints/last.ckpt
+  vocab_size: 30523
+  mask_id: 30522
+distill:
+  K: 4
+  substeps: 4
+  eta: 0.5                 # fraction of steps drawn off the K-step schedule
+  horizon: [0.03125, 1.0]  # log-uniform step size for those steps
+  x0_coef: 1.0
+  x0_rows: 0.25
+model:
+  dim: 768
+  depth: 12
+  heads: 12
+  latent_M: 4
+  latent_last_L: 4
+  time_embed_dim: 256
+  cond_dim: 128
+  dropout: 0.1
+  arch: mdlm
+  router_entropy_coef: 0.1

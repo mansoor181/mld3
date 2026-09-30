@@ -5,11 +5,9 @@ them with FID, Inception score, precision and recall. We drive the ReDi baseline
 `MultiInceptionMetrics`, which wraps the `torch_fidelity` InceptionV3 port, so that our numbers
 are produced by the same feature extractor the image baselines report against.
 
-We import `Metrics.inception_metrics` directly rather than through `Metrics.sample_and_eval`,
-whose third line is `import clip` and which would drag in a CLIP install we have no use for.
-
-Decoding is streamed. Ten thousand decoded images at float32 come to 30 GB, while one chunk of
-64 as uint8 is 12 MB, and nothing is ever written to disk.
+`Metrics.inception_metrics` is imported directly rather than through `Metrics.sample_and_eval`,
+whose third line is `import clip`. Decoding is streamed, since ten thousand float32 images come
+to 30 GB while one chunk of 64 as uint8 is 12 MB.
 """
 from __future__ import annotations
 
@@ -24,9 +22,7 @@ from omegaconf import OmegaConf
 
 from paths import IMAGE_ROOT, REDI_IMAGE_DIR
 
-# The VQGAN and the Inception metrics live in the vendored ReDi image tree. We import them
-# rather than copying, so that a future upstream change shows up as a diff instead of silently
-# diverging, which is why the tree goes on the path before those two imports.
+# The VQGAN and the Inception metrics are imported from the ReDi image tree rather than copied.
 sys.path.insert(0, REDI_IMAGE_DIR)
 from Metrics.inception_metrics import MultiInceptionMetrics
 from Network.Taming.models.vqgan import VQModel
@@ -126,3 +122,12 @@ def score(metric, fake_uint8_batches: Iterator[torch.Tensor],
         metric.update(batch, image_type="unconditional")
     out = metric.compute()
     return {k.replace("_unconditional", ""): float(v) for k, v in out.items()}
+
+
+def evaluate(samples: np.ndarray, meta: dict, device: torch.device,
+             reference_name: str = "imagenet256_val") -> dict[str, float]:
+    """FID, precision, recall, density and coverage for one set of token grids."""
+    vq = build_vqgan(device)
+    metric = build_metric(device)
+    reference = load_reference(reference_name, device)
+    return score(metric, tokens_to_uint8(samples, vq, device, grid=meta["grid"]), reference)
