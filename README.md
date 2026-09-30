@@ -1,12 +1,7 @@
 # Mixture-of-Latents for Few-Step Discrete Diffusion Distillation (MLD3)
 
-Reference implementation. An MLD3 student replaces the factorized step of a masked diffusion
-model with a mixture of `M` factorized components selected by a learned router,
-
-    p_theta(x_s | x_t) = sum_k w_k(x_t, t) prod_i P_{i,k}(x_s^i | x_t, t),
-
-which makes the step likelihood a closed-form sum over `M` terms and gives the mixing weights
-a gradient. At `M = 1` it reduces to a masked diffusion student.
+An MLD3 student replaces the factorized step of a masked diffusion
+model with a mixture of `M` factorized components selected by a learned router, which makes the step likelihood a closed-form sum over `M` terms. 
 
 ```
 paths.py            external roots, resolved from the environment and an optional .env
